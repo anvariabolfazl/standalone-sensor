@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Private - passcode required</title>
+<style>
+  :root { --line:#d9e0e8; --text:#1b2430; --muted:#5b6777; --acc:#ff6a00; --bad:#f0274d; }
+  * { box-sizing:border-box; }
+  body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; font-family:"Segoe UI",system-ui,sans-serif;
+         background:radial-gradient(ellipse at 60% 30%, #1b2a4a 0%, #0b1224 60%, #060a16 100%); color:var(--text); }
+  .box { width:min(92vw, 380px); background:#fff; border-radius:16px; padding:28px 26px 22px; box-shadow:0 20px 60px rgba(0,0,0,.35); }
+  h1 { margin:0 0 6px; font-size:20px; }
+  p { margin:0 0 18px; color:var(--muted); font-size:14px; line-height:1.45; }
+  input[type=password] { width:100%; font:inherit; font-size:16px; padding:10px 12px; border:1px solid var(--line); border-radius:10px; outline:none; }
+  input[type=password]:focus { border-color:var(--acc); box-shadow:0 0 0 3px #ffe3cc; }
+  label { display:flex; gap:8px; align-items:center; font-size:13px; color:var(--muted); margin:12px 0 16px; }
+  button { width:100%; font:inherit; font-weight:600; padding:10px; border:0; border-radius:10px; background:var(--acc); color:#fff; cursor:pointer; }
+  button:disabled { opacity:.6; cursor:wait; }
+  .err { color:var(--bad); font-size:13px; min-height:18px; margin-top:10px; }
+  .legal { margin-top:18px; font-size:11px; color:#8a94a3; line-height:1.4; }
+</style>
+</head>
+<body>
+<form class="box" id="f" autocomplete="off">
+  <h1>Private project page</h1>
+  <p>This page and its data are encrypted. Enter the passcode to open it.</p>
+  <input type="password" id="pw" placeholder="Passcode" autofocus>
+  <label><input type="checkbox" id="remember"> Remember on this device</label>
+  <button id="go">Open</button>
+  <div class="err" id="err"></div>
+  <div class="legal">© 2026 Abolfazl Anvari Kohestani. All rights reserved. Confidential: do not copy, share or distribute.</div>
+</form>
+<script>
+const b64e = u => btoa(String.fromCharCode(...new Uint8Array(u)));
+const b64d = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+async function openApp(rawB64){
+  const key = await crypto.subtle.importKey("raw", b64d(rawB64), "AES-GCM", false, ["decrypt"]);
+  const r = await fetch("app.enc?v=" + Date.now()); if(!r.ok) throw new Error("missing");
+  const b = new Uint8Array(await r.arrayBuffer());
+  const pt = await crypto.subtle.decrypt({ name:"AES-GCM", iv:b.slice(0, 12) }, key, b.slice(12));   // fails on a wrong passcode
+  const html = await new Response(new Blob([pt]).stream().pipeThrough(new DecompressionStream("deflate"))).text();
+  // show the decrypted dashboard in a full-window frame (same site, so it can read the saved key)
+  const t = html.match(/<title>([^<]*)<\/title>/); if(t) document.title = t[1];
+  document.body.innerHTML = ""; document.body.style.cssText = "margin:0;background:#f3f6fa";
+  const f = document.createElement("iframe");
+  f.style.cssText = "position:fixed;inset:0;width:100%;height:100%;border:0";
+  f.srcdoc = html; document.body.appendChild(f);
+}
+async function derive(pass){
+  const g = await (await fetch("gate.json?v=" + Date.now())).json();
+  const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(pass), "PBKDF2", false, ["deriveBits"]);
+  const bits = await crypto.subtle.deriveBits({ name:"PBKDF2", hash:"SHA-256", salt:b64d(g.salt), iterations:g.iter }, base, 256);
+  return b64e(bits);
+}
+(async () => {      // a key saved earlier on this device opens the page straight away
+  const saved = sessionStorage.getItem("ss_key") || localStorage.getItem("ss_key");
+  if(saved){ try { await openApp(saved); return; } catch(e){ sessionStorage.removeItem("ss_key"); localStorage.removeItem("ss_key"); } }
+})();
+document.getElementById("f").onsubmit = async e => {
+  e.preventDefault();
+  const btn = document.getElementById("go"), err = document.getElementById("err");
+  btn.disabled = true; err.textContent = "";
+  try {
+    const raw = await derive(document.getElementById("pw").value);
+    sessionStorage.setItem("ss_key", raw);
+    if(document.getElementById("remember").checked) localStorage.setItem("ss_key", raw);
+    await openApp(raw);
+  } catch(x){
+    sessionStorage.removeItem("ss_key"); localStorage.removeItem("ss_key");
+    err.textContent = "Wrong passcode, or the page is still being set up.";
+    btn.disabled = false;
+  }
+};
+</script>
+</body>
+</html>
